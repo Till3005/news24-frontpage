@@ -1,179 +1,269 @@
-#!/usr/bin/env python3
-"""Compose a 1600x1600 newspaper front page (entry.png) from panels/p1..p6."""
-
 import os
+
 from PIL import Image, ImageDraw, ImageFont
 
-W = H = 1600
-PANELS_DIR = "panels"
-OUT = "entry.png"
+W, H = 1600, 2000
+MASTHEAD_H = 130
+STRIP_H = 55
+HERO_H = 430
+FOOTER_H = 50
+COL_W = W // 2
+STORIES_TOP = MASTHEAD_H + STRIP_H + HERO_H
+STORIES_H = H - FOOTER_H - STORIES_TOP
+ROWS = 14
+ROW_H = STORIES_H / ROWS
+CAPTION_BAR_H = 46
 
-BLACK = (10, 10, 10)
-WHITE = (245, 245, 245)
-RED = (178, 24, 24)
-PAPER = (238, 234, 226)
+RED = (201, 18, 33)
+WHITE = (255, 255, 255)
+OFFWHITE = (230, 230, 230)
+BLACK = (0, 0, 0)
+PAGE_BG = (16, 16, 16)
+ROW_A = (25, 25, 25)
+ROW_B = (35, 35, 35)
+DIVIDER = (62, 62, 62)
 
-FONT_CANDIDATES = {
-    "serif_bold": [
+REGION_COLORS = {
+    "ASIA": (14, 118, 99),
+    "MIDEAST": (176, 133, 60),
+    "EUROPE": (139, 95, 168),
+    "LATAM": (178, 91, 58),
+    "US": (70, 98, 143),
+    "TECH": (95, 122, 52),
+    "SCIENCE": (61, 155, 181),
+    "CULTURE": (168, 74, 110),
+}
+
+STORIES = [
+    ("ASIA", "Shenzhou-24 carries Pakistan's first astronaut to orbit"),
+    ("ASIA", "Xi purge widens: politburo star under investigation"),
+    ("ASIA", "Solomon Islands signs security treaty with Australia"),
+    ("ASIA", "North Korea expels Swiss diplomat over sanctions"),
+    ("MIDEAST", "Houthis take second swipe at Riyadh's tallest tower"),
+    ("MIDEAST", "Ukraine's Mediterranean strike becomes a problem for Meloni"),
+    ("EUROPE", "Russia's own figures show almost 500,000 war deaths"),
+    ("LATAM", "Armed men take hostages in Cartagena tourist district"),
+    ("US", "CIA and ODNI suffer cybersecurity breach, source says"),
+    ("US", "Record king tides leave Bay Area roads flooded"),
+    ("US", "Iowa town evacuates as Army detonates lead azide stockpile"),
+    ("US", "Six killed as plane crashes off Mississippi coast"),
+    ("US", "Fort Hood shooter Nidal Hasan petitions to delay execution"),
+    ("US", "House counsel refused to join raid on Rep. Ilhan Omar"),
+    ("US", "Kilmar Abrego Garcia leaves US for Spain, ending deportation battle"),
+    ("US", "Trump plays the hits at Thanksgiving turkey pardon"),
+    ("TECH", "GTA VI's jaw-dropping success in figures"),
+    ("TECH", "CoD and Fortnite engagement plunges after GTA VI launch"),
+    ("TECH", "Apple Mail gains four new features in iOS 27"),
+    ("TECH", "Black Friday laptop deals land early"),
+    ("SCIENCE", "Claude and ChatGPT's new biology skills wow scientists"),
+    ("CULTURE", "Dancing With the Stars names historic season 35 winner"),
+    ("CULTURE", "Thanksgiving storm threatens Macy's parade"),
+    ("CULTURE", "Blade Runner 2099 score lands below both originals"),
+    ("CULTURE", "Pope Francis' diary excerpts reveal spiritual struggles"),
+    ("US", "Stock futures slip as traders await key inflation report"),
+    ("ASIA", "Asian stocks slide as AI trade doubts resurface"),
+    ("CULTURE", "Hunger Games prequel eyes Thanksgiving box office"),
+]
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+
+FONT_PATHS = {
+    "serif": [
         "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
+        "/System/Library/Fonts/Supplemental/GeorgiaBold.ttf",
         "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Georgia Bold Italic.ttf",
     ],
-    "condensed": [
+    "sans": [
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ],
+    "cond": [
         "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Narrow.ttf",
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    ],
-    "bold": [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-    ],
-    "black": [
-        "/System/Library/Fonts/Supplemental/Arial Black.ttf",
-        "/System/Library/Fonts/Supplemental/Impact.ttf",
     ],
 }
 
-
-def pick(kind):
-    for path in FONT_CANDIDATES[kind]:
-        if os.path.exists(path):
-            return path
-    raise FileNotFoundError(f"No font found for {kind}")
+_used_fonts = {}
+_cache = {}
 
 
 def font(kind, size):
-    return ImageFont.truetype(pick(kind), size)
+    key = (kind, size)
+    if key not in _cache:
+        f = None
+        for path in FONT_PATHS[kind]:
+            if os.path.exists(path):
+                try:
+                    f = ImageFont.truetype(path, size)
+                    _used_fonts[kind] = path
+                    break
+                except OSError:
+                    continue
+        if f is None:
+            f = ImageFont.load_default()
+        _cache[key] = f
+    return _cache[key]
 
 
-def fit_text(draw, text, kind, max_size, max_width):
-    """Return a font whose rendered text width fits max_width."""
-    size = max_size
-    while size > 8:
-        f = font(kind, size)
-        w = draw.textlength(text, font=f)
-        if w <= max_width:
-            return f
-        size -= 2
-    return font(kind, 8)
+def crop_to_fill(path, box_w, box_h):
+    img = Image.open(path).convert("RGB")
+    scale = max(box_w / img.width, box_h / img.height)
+    rw = max(box_w, round(img.width * scale))
+    rh = max(box_h, round(img.height * scale))
+    img = img.resize((rw, rh), Image.LANCZOS)
+    left = (rw - box_w) // 2
+    top = (rh - box_h) // 2
+    return img.crop((left, top, left + box_w, top + box_h))
 
 
-def cover_crop(img, cw, ch):
-    """Resize + center-crop image so it exactly fills cw x ch."""
-    scale = max(cw / img.width, ch / img.height)
-    nw, nh = round(img.width * scale), round(img.height * scale)
-    img = img.resize((nw, nh), Image.LANCZOS)
-    left = (nw - cw) // 2
-    top = (nh - ch) // 2
-    return img.crop((left, top, left + cw, top + ch))
+def draw_chip(d, x, cy, label, fill, text_fill, f, pad_x=8, h=20, radius=4):
+    tw = d.textlength(label, font=f)
+    w = tw + pad_x * 2
+    d.rounded_rectangle([x, cy - h / 2, x + w, cy + h / 2], radius=radius, fill=fill)
+    d.text((x + w / 2, cy + 1), label, font=f, fill=text_fill, anchor="mm")
+    return w
 
 
-HEADLINES = [
-    "SHENZHOU-24: PAKISTAN'S FIRST ASTRONAUT LAUNCHES",
-    "HOSTAGE SIEGE GRIPS CARTAGENA",
-    "RECORD KING TIDES FLOOD BAY AREA",
-    "XI PURGE: POLITBURO STAR PROBED",
-    "HUAWEI CONVICTED IN U.S. COURT",
-    "IOWA TOWN EVACUATES FOR AZIDE BLAST",
-]
+def wrap_truncate(d, text, f, max_w, max_lines=2):
+    lines = []
+    cur = ""
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if not cur or d.textlength(trial, font=f) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    if len(lines) <= max_lines:
+        return lines
+    out = lines[:max_lines]
+    last = out[-1]
+    while last and " " in last and d.textlength(last + "\u2026", font=f) > max_w:
+        last = last.rsplit(" ", 1)[0]
+    out[-1] = last + "\u2026"
+    return out
 
 
 def main():
-    page = Image.new("RGB", (W, H), PAPER)
-    draw = ImageDraw.Draw(page)
+    img = Image.new("RGB", (W, H), PAGE_BG)
+    d = ImageDraw.Draw(img)
 
-    # ---- Masthead ----
-    masthead_h = 240
-    draw.rectangle([0, 0, W, masthead_h], fill=BLACK)
-    mast_text = "THE WORLD"
-    mast_font = fit_text(draw, mast_text, "serif_bold", 170, W - 160)
-    bbox = draw.textbbox((0, 0), mast_text, font=mast_font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text(((W - tw) / 2 - bbox[0], (masthead_h - th) / 2 - bbox[1]),
-              mast_text, font=mast_font, fill=WHITE)
+    d.rectangle([0, 0, W, MASTHEAD_H], fill=BLACK)
+    d.text(
+        (W / 2, MASTHEAD_H / 2 + 4),
+        "THE WORLD",
+        font=font("serif", 96),
+        fill=WHITE,
+        anchor="mm",
+    )
 
-    # ---- Red dateline strip ----
-    strip_top = masthead_h
-    strip_h = 78
-    draw.rectangle([0, strip_top, W, strip_top + strip_h], fill=RED)
-    strip_text = "TUESDAY, 24 NOVEMBER 2026 — THE DAY IN WORLD NEWS"
-    strip_font = fit_text(draw, strip_text, "condensed", 46, W - 120)
-    bbox = draw.textbbox((0, 0), strip_text, font=strip_font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text(((W - tw) / 2 - bbox[0], strip_top + (strip_h - th) / 2 - bbox[1]),
-              strip_text, font=strip_font, fill=WHITE)
+    strip_top = MASTHEAD_H
+    d.rectangle([0, strip_top, W, strip_top + STRIP_H], fill=RED)
+    d.text(
+        (28, strip_top + STRIP_H / 2),
+        "TUESDAY, 24 NOVEMBER 2026 \u2014 30 STORIES, 8 REGIONS",
+        font=font("cond", 27),
+        fill=WHITE,
+        anchor="lm",
+    )
 
-    # ---- Grid ----
-    margin = 24
-    gap = 24
-    grid_top = strip_top + strip_h + margin
-    grid_bottom = H - margin
-    cell_w = (W - 2 * margin - 2 * gap) // 3
-    cell_h = (grid_bottom - grid_top - gap) // 2
-    bar_h = 110
-
-    for idx in range(6):
-        row, col = divmod(idx, 3)
-        x0 = margin + col * (cell_w + gap)
-        y0 = grid_top + row * (cell_h + gap)
-        img_h = cell_h - bar_h
-
-        panel = Image.open(os.path.join(PANELS_DIR, f"p{idx + 1}.png")).convert("RGB")
-        panel = cover_crop(panel, cell_w, img_h)
-        page.paste(panel, (x0, y0))
-
-        # caption bar
-        bar_top = y0 + img_h
-        draw.rectangle([x0, bar_top, x0 + cell_w, bar_top + bar_h], fill=BLACK)
-
-        # red number chip
-        chip = 56
-        cx = x0 + 22
-        cy = bar_top + (bar_h - chip) // 2
-        draw.rectangle([cx, cy, cx + chip, cy + chip], fill=RED)
-        num_font = font("black", 34)
-        nbbox = draw.textbbox((0, 0), str(idx + 1), font=num_font)
-        nw, nh = nbbox[2] - nbbox[0], nbbox[3] - nbbox[1]
-        draw.text((cx + (chip - nw) / 2 - nbbox[0], cy + (chip - nh) / 2 - nbbox[1]),
-                  str(idx + 1), font=num_font, fill=WHITE)
-
-        # headline text, fitted to remaining width, wrapped to 2 lines if needed
-        text_x = cx + chip + 22
-        avail_w = x0 + cell_w - 22 - text_x
-        fpath = pick("bold")
-        size = 34
-        while size > 14:
-            f = ImageFont.truetype(fpath, size)
-            if draw.textlength(HEADLINES[idx], font=f) <= avail_w:
-                break
+    hero_top = strip_top + STRIP_H
+    heroes = [
+        (
+            os.path.join(BASE, "panels", "p1.png"),
+            "01",
+            "SHENZHOU-24: PAKISTAN'S FIRST ASTRONAUT LAUNCHES",
+        ),
+        (
+            os.path.join(BASE, "panels", "p5.png"),
+            "02",
+            "HUAWEI CONVICTED IN U.S. COURT",
+        ),
+    ]
+    for i, (path, chip_label, caption) in enumerate(heroes):
+        x0 = i * COL_W
+        try:
+            panel = crop_to_fill(path, COL_W, HERO_H)
+        except Exception:
+            panel = Image.new("RGB", (COL_W, HERO_H), (42, 42, 42))
+            pd = ImageDraw.Draw(panel)
+            pd.text(
+                (COL_W / 2, HERO_H / 2),
+                "MISSING PANEL",
+                font=font("sans", 24),
+                fill=(130, 130, 130),
+                anchor="mm",
+            )
+        img.paste(panel, (x0, hero_top))
+        bar_y = hero_top + HERO_H - CAPTION_BAR_H
+        d.rectangle([x0, bar_y, x0 + COL_W, hero_top + HERO_H], fill=BLACK)
+        cy = bar_y + CAPTION_BAR_H / 2
+        chip_w = draw_chip(
+            d, x0 + 12, cy, chip_label, RED, WHITE, font("sans", 14), pad_x=9, h=24
+        )
+        size = 18
+        while size > 10 and d.textlength(caption, font=font("sans", size)) > COL_W - chip_w - 46:
             size -= 1
-        hl_font = ImageFont.truetype(fpath, size)
-        if draw.textlength(HEADLINES[idx], font=hl_font) > avail_w:
-            # wrap into two balanced lines
-            words = HEADLINES[idx].split()
-            best, best_diff = None, None
-            for k in range(1, len(words)):
-                l1, l2 = " ".join(words[:k]), " ".join(words[k:])
-                w1 = draw.textlength(l1, font=hl_font)
-                w2 = draw.textlength(l2, font=hl_font)
-                if w1 <= avail_w and w2 <= avail_w:
-                    diff = abs(w1 - w2)
-                    if best_diff is None or diff < best_diff:
-                        best, best_diff = (l1, l2), diff
-            lines = best if best else (HEADLINES[idx], "")
-        else:
-            lines = (HEADLINES[idx],)
-        bbox = draw.textbbox((0, 0), "AX", font=hl_font)
-        line_h = (bbox[3] - bbox[1]) + 8
-        total_h = line_h * len([l for l in lines if l])
-        ty = bar_top + (bar_h - total_h) / 2 - bbox[1]
-        for line in lines:
-            if not line:
-                continue
-            draw.text((text_x, ty), line, font=hl_font, fill=WHITE)
-            ty += line_h
+        d.text(
+            (x0 + 12 + chip_w + 12, cy),
+            caption,
+            font=font("sans", size),
+            fill=WHITE,
+            anchor="lm",
+        )
 
-    page.save(OUT)
-    print(f"Wrote {OUT} ({W}x{H})")
+    for r in range(ROWS):
+        y0 = STORIES_TOP + round(r * ROW_H)
+        y1 = STORIES_TOP + round((r + 1) * ROW_H)
+        d.rectangle([0, y0, W, y1], fill=ROW_A if r % 2 == 0 else ROW_B)
+        d.line([0, y1, W, y1], fill=DIVIDER, width=1)
+    d.line([COL_W, STORIES_TOP, COL_W, STORIES_TOP + STORIES_H], fill=DIVIDER, width=1)
+
+    num_f = font("sans", 19)
+    chip_f = font("sans", 12)
+    head_f = font("serif", 22)
+    head_x_off = 62
+    max_head_w = COL_W - head_x_off - 16
+    for idx, (region, headline) in enumerate(STORIES):
+        col = idx // ROWS
+        r = idx % ROWS
+        x0 = col * COL_W
+        y0 = STORIES_TOP + round(r * ROW_H)
+        d.text((x0 + 16, y0 + 23), f"{idx + 3:02d}", font=num_f, fill=RED, anchor="lm")
+        draw_chip(d, x0 + head_x_off, y0 + 23, region, REGION_COLORS[region], WHITE, chip_f, h=19)
+        ly = y0 + 41
+        for line in wrap_truncate(d, headline, head_f, max_head_w, 2):
+            d.text((x0 + head_x_off, ly), line, font=head_f, fill=WHITE, anchor="la")
+            ly += 26
+
+    foot_top = H - FOOTER_H
+    d.rectangle([0, foot_top, W, H], fill=BLACK)
+    d.line([0, foot_top, W, foot_top], fill=RED, width=2)
+    foot_f = font("sans", 16)
+    d.text(
+        (28, foot_top + FOOTER_H / 2),
+        "THE WORLD \u2014 the day in one page",
+        font=foot_f,
+        fill=OFFWHITE,
+        anchor="lm",
+    )
+    d.text(
+        (W - 28, foot_top + FOOTER_H / 2),
+        "24 NOV 2026",
+        font=foot_f,
+        fill=OFFWHITE,
+        anchor="rm",
+    )
+
+    out = os.path.join(BASE, "entry.png")
+    img.save(out)
+    print(f"saved {out} ({img.width}x{img.height})")
+    for kind, path in _used_fonts.items():
+        print(f"font[{kind}] = {path}")
 
 
 if __name__ == "__main__":
